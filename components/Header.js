@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import avatarPic from '../public/avatar.jpeg';
+import avatarPic from '../public/static/avatar.jpeg';
 
 export default function Header({ name }) {
   return (

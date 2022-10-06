@@ -162,21 +162,21 @@ export async function updateLike(id, clientIp, liked) {
 ## 监控
 在控制台可以看到详细的监控信息，包括请求量、耗时、CPU 时间 等等。
 
-![dashboard](/worker-dashboard.jpg)
+![dashboard](/posts/workers/worker-dashboard.jpg)
 
 ## 部署
 [wrangler][] dev 和 publish 分别会生成开发预览域名以及生产域名。
 
-![routes](/worker-route.jpg)
+![routes](/posts/workers/worker-route.jpg)
 
 ## 日志
 在控制台还能看到实时的服务日志，需要手动触发，看起来用户大部分都是小流量，如果大流量的话应该无法通过这种方式获取到有效信息。（当然可以把日志持久化了以后再看）
 
-![log list](/worker-log-list.jpg)
+![log list](/posts/workers/worker-log-list.jpg)
 
 在日志详细信息中，可以看到通过 console.log 打印的日志。为 logs 字端，截图对应代码中无打印信息。
 
-![log detail](/worker-log-detail.jpg)
+![log detail](/posts/workers/worker-log-detail.jpg)
 
 # 使用感受
 好的：
