@@ -1,0 +1,202 @@
+---
+title: Cloudflare worker 试用 —— kv + worker
+description: "尝试试用 kv + worker 实现一个简单的点赞"
+date: Oct 06 2022
+---
+
+# Workers
+
+## 简介
+首先我们需要了解一下 [service worker][] 是什么，简单来说可以认为是一个基于请求/响应模型的代理服务器。
+[Workers][] 是 Cloudflare 提供的一种 serverless 计算能力，基于 v8 实现（非 node 环境），运行在 CDN 网络的边缘节点上。功能与其类似，区别是运行在了服务端。
+
+## Hello, world
+[Workers][] 提供了类 [service worker][] 和 [module worker][] 两种编程界面，两种编程界面的区别在于 request handler 是否需要手动挂载。
+
+[service worker][] 模式需要通过 [addEventListener][] 手动挂载 handler。
+```js
+async function handler(request) {
+  return new Response('Hello worker!', {
+    headers: { 'content-type': 'text/plain' },
+  });
+}
+
+// Initialize Worker
+addEventListener('fetch', event => {
+  event.respondWith(handler(event.request));
+});
+```
+
+而 [module worker][] 仅需使用 export default 即可。
+
+```js
+export default {
+  fetch(request) {
+    return new Response('Hello worker!', {
+      headers: { 'content-type': 'text/plain' },
+    });
+  },
+};
+```
+
+[Workers][] 提供的编程界面较为底层，仅提供了 fetch 事件，以及 request, response 等定义。这样挺好，为开发者提供了很大的空间，可以由上层框架来自己适配 [Workers][] 的执行逻辑。
+
+### 配置文件
+[wrangler.toml][] 中配置了 [Workers][] 的必要信息:
+- name 为 worker 的名字，会在控制台的 service 中看到
+- main 为入口文件
+- compatibility_date 为运行时版本
+
+```toml
+name = "blog-like-worker"
+main = "index.js"
+compatibility_date = "2022-10-06"
+workers_dev = true
+
+kv_namespaces = [
+    { binding = "blog_like", id = "${id}", preview_id = "${id}" }
+]
+```
+
+
+## dev
+通过 [wrangler][] 命令行工具即可开始我们的开发过程，通过 npx wrangler dev 运行本地开发环境，dev 命令没有使用 https_proxy 环境变量，
+由于网络的问题没有运行成功。。通过 npx wrangler publish 发布到线上（这个命令使用了 https_proxy）。
+
+### 试用项目
+我们需要实现一个简单的博客点赞功能，需要的功能点有：
+- 用户识别，简单通过用户 IP 来实现
+- 持久化，记录用户是否点赞
+
+### 路由处理
+本次试用目的很简单，感受一下 [Workers][] 的使用体验，直接使用了 path-to-regexp 来进行路由处理。
+
+```js
+const LIKE_ROUTER = pathToRegexp('/api/v1/blogs/:id/like');
+
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request))
+});
+
+async function handleRequest(request) {
+  const requestUrl = new URL(request.url);
+  const matchLike = LIKE_ROUTER.exec(requestUrl.pathname);
+  if (matchLike && request.method === 'POST') {
+    return postLikeHandler(request);
+  } else if (matchLike && request.method === 'GET') {
+    return getLikeHandler(request);
+  }
+  return new Response('Not Found', {
+    status: 404,
+    headers: {
+      'content-type': 'text/plain',
+    },
+  })
+}
+
+async function postLikeHandler(request) {
+  const requestUrl = new URL(request.url);
+  const matchLike = LIKE_ROUTER.exec(requestUrl.pathname);
+  const id = matchLike[1];
+  const clientIp = request.headers.get('cf-connecting-ip');
+  const { liked } = await request.json();
+  await updateLike(id, clientIp, liked);
+  return new Response('ok', {
+    headers: {
+      'content-type': 'text/plain',
+    },
+  });
+}
+```
+
+### 持久化能力
+[Workers][] 可以配合 [kv][], [durable object][], [R2][] 这些服务来实现持久化能力，我们先搞个最简单的能力，仅使用 [kv][]。
+
+通过 [wrangler][] 的 kv 命令创建一个 namespace。
+
+```shell
+npx wrangler kv:namespace create blog_like
+```
+
+需要在 [wrangler.toml][] 中配置 binding。
+
+```toml
+kv_namespaces = [
+    { binding = "blog_like", id = "${id}", preview_id = "${preview_id}" }
+]
+```
+
+比如我们本次创建的 kv binding 为 blog_like，我们可以直接在 js 中通过 blog_like 来对其进行访问。
+
+```js
+function getLikeKey(id) {
+  return `like:${id}`;
+}
+
+async function getLikeList(id) {
+  const likeList = await blog_like.get(getLikeKey(id));
+  if (!likeList) return [];
+  return Array.from(new Set(likeList.split(',')));
+}
+
+async function saveLikeList(id, likeList) {
+  likeList = Array.from(new Set(likeList));
+  await blog_like.put(getLikeKey(id), likeList.join(','));
+}
+
+export async function updateLike(id, clientIp, liked) {
+  const likeList = await getLikeList(id);
+  if (liked) {
+    likeList.push(clientIp);
+    await saveLikeList(id, likeList);
+  } else {
+    const index = likeList.indexOf(clientIp);
+    if (index > -1) {
+      likeList.splice(likeList.indexOf(clientIp), 1);
+      await saveLikeList(id, likeList);
+    }
+  }
+}
+```
+
+## 监控
+在控制台可以看到详细的监控信息，包括请求量、耗时、CPU 时间 等等。
+
+![dashboard](/worker-dashboard.jpg)
+
+## 部署
+[wrangler][] dev 和 publish 分别会生成开发预览域名以及生产域名。
+
+![routes](/worker-route.jpg)
+
+## 日志
+在控制台还能看到实时的服务日志，需要手动触发，看起来用户大部分都是小流量，如果大流量的话应该无法通过这种方式获取到有效信息。（当然可以把日志持久化了以后再看）
+
+![log list](/worker-log-list.jpg)
+
+在日志详细信息中，可以看到通过 console.log 打印的日志。为 logs 字端，截图对应代码中无打印信息。
+
+![log detail](/worker-log-detail.jpg)
+
+# 使用感受
+好的：
+- 编程界面基于请求响应模型，扩展空间极大。不论是 react server component 还是 koa/express/egg 等 node 框架都能进行迁移适配，也能过 html 处理。
+- 很强的服务，比如 cache 很棒，和 [service worker][] 接近，可以存储响应。还有上文中的 [kv][] [R2][] 等等。
+- serverless 感受很强，不需要关心规格、QPS 等等
+
+不好的：
+- dev 没跑起来，依赖远程服务。
+- 和 [Pages][] 配合感不强，不能无缝使用，这可能是因为服务偏底层的原因。
+- [wrangler][] 使用较为复杂，如果 kv 直接可以通过 toml 创建为更便捷。
+
+
+[service worker]: https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API
+[Workers]: https://developers.cloudflare.com/workers/
+[module worker]: https://developers.cloudflare.com/workers/learning/migrating-to-module-workers/
+[addEventListener]: https://developers.cloudflare.com/workers/runtime-apis/add-event-listener/
+[wrangler]: https://developers.cloudflare.com/workers/wrangler/get-started/
+[kv]: https://developers.cloudflare.com/workers/runtime-apis/kv/
+[durable object]: https://developers.cloudflare.com/workers/runtime-apis/durable-objects/
+[R2]: https://developers.cloudflare.com/r2/data-access/workers-api/workers-api-reference/
+[wrangler.toml]: https://developers.cloudflare.com/workers/wrangler/configuration/
+[Pages]: https://developers.cloudflare.com/pages/

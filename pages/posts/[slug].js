@@ -15,6 +15,7 @@ import Footer from '../../components/Footer';
 import Header from '../../components/Header';
 import Layout, { GradientBackground } from '../../components/Layout';
 import SEO from '../../components/SEO';
+import Like from "../../components/Like";
 
 // Custom components/renderers to pass to MDX.
 // Since the MDX files aren't loaded by webpack, they have no knowledge of how
@@ -56,6 +57,9 @@ export default function PostPage({
             <MDXRemote {...source} components={components} />
           </article>
         </main>
+        <div className="grid md:grid-cols-2 lg:-mx-24 mt-12">
+          <Like title={frontMatter.title}/>
+        </div>
         <div className="grid md:grid-cols-2 lg:-mx-24 mt-12">
           {prevPost && (
             <Link href={`/posts/${prevPost.slug}`}>
